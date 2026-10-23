@@ -85,7 +85,19 @@ async function sha256Hex(text) {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 async function hashRow(prev, row) {
-  return sha256Hex(prev + JSON.stringify(ROW_FIELDS.map((f) => row[f] ?? null)));
+  const parts = ROW_FIELDS.map((f) => row[f] ?? null);
+  if (row.voids_id != null) parts.push(row.voids_id, row.reason ?? null);
+  return sha256Hex(prev + JSON.stringify(parts));
+}
+function totalsOf(rows) {
+  const voided = new Set(rows.filter((r) => r.voids_id != null).map((r) => r.voids_id));
+  const act = rows.filter((r) => r.voids_id == null && !voided.has(r.id));
+  return {
+    interventions: act.length,
+    hours_estimated: act.reduce((s, r) => s + r.hours_saved, 0),
+    usd_estimated: act.reduce((s, r) => s + r.usd_saved, 0),
+    voided_entries: rows.filter((r) => r.voids_id != null).length,
+  };
 }
 function pemToDer(pem) {
   const b64 = pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
@@ -122,9 +134,9 @@ async function verifyReceiptWeb(receipt, expectedPem) {
     }
     add("Integridad de cada fila", badRow ? "bad" : "ok", badRow ? `la fila ${badRow.id} no coincide con su hash` : `${body.rows.length} filas`);
 
-    const sum = (f) => body.rows.reduce((s, r) => s + r[f], 0);
-    const totalsOk = body.totals.interventions === body.rows.length &&
-      body.totals.hours_estimated === sum("hours_saved") && body.totals.usd_estimated === sum("usd_saved");
+    const t = totalsOf(body.rows);
+    const totalsOk = body.totals.interventions === t.interventions && body.totals.hours_estimated === t.hours_estimated &&
+      body.totals.usd_estimated === t.usd_estimated && body.totals.voided_entries === t.voided_entries;
     add("Totales", totalsOk ? "ok" : "bad", totalsOk ? "" : "los totales no coinciden con las filas");
     const noTest = body.rows.every((r) => !r.is_test);
     add("Sin corridas de prueba", noTest ? "ok" : "bad");
@@ -182,7 +194,7 @@ $("go").addEventListener("click", async () => {
   const summary = b.totals ? `<dl>
       <dt>Proyecto</dt><dd>${esc(b.project)}</dd>
       <dt>Emitido</dt><dd>${esc(b.issued_at)}</dd>
-      <dt>Intervenciones</dt><dd>${esc(b.totals.interventions)}</dd>
+      <dt>Intervenciones vigentes</dt><dd>${esc(b.totals.interventions)}${b.totals.voided_entries ? ` (${esc(b.totals.voided_entries)} anulada(s), vea las notas)` : ""}</dd>
       <dt>Horas estimadas</dt><dd>${esc(b.totals.hours_estimated)} h</dd>
       <dt>Valor estimado</dt><dd>${esc(money(b.totals.usd_estimated))}</dd>
       <dt>Hash de cabeza</dt><dd>${esc(b.chain?.head ?? "")}</dd>
